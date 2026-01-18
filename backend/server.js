@@ -1,3 +1,5 @@
+/* eslint-env node */
+/* eslint-disable no-undef */
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -16,11 +18,17 @@ const paymentRoutes = require('./routes/payments');
 const userRoutes = require('./routes/users');
 const chatRoutes = require('./routes/chat');
 const enhancedChatRoutes = require('./routes/enhancedChat');
+// const resumeAnalysisRoutes = require('./routes/resumeAnalysis'); // Commented out as it's causing conflicts
+const resumeRoutes = require('./routes/resume');
+const atsRoutes = require('./routes/ats');
+const jobsRoutes = require('./routes/jobs');
+const groqRoutes = require('./routes/groq');
 
 const app = express();
 
 // Connect to MongoDB
 connectDB();
+
 
 // Trust proxy
 app.set('trust proxy', 1);
@@ -87,6 +95,10 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
+// Request timeout to prevent hanging requests
+const requestTimeout = require('./middleware/requestTimeout');
+app.use(requestTimeout(parseInt(process.env.REQUEST_TIMEOUT_MS) || 30000));
+
 // Apply stricter rate limiting to auth routes
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -137,6 +149,12 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/enhanced-chat', enhancedChatRoutes);
+// app.use('/api/resume', resumeAnalysisRoutes); // Commented out as it's causing conflicts
+app.use('/api/resume', resumeRoutes); // Using the main resume routes
+app.use('/api/ats', atsRoutes); // Real-time ATS scoring with Groq AI
+app.use('/api/jobs', jobsRoutes); // Job suggestions & matching
+app.use('/api', groqRoutes); // Groq AI chat completions
+
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -167,6 +185,8 @@ app.use('*', (req, res) => {
 });
 
 // Global error handler
+// Global error handler (centralized)
+// eslint-disable-next-line no-unused-vars
 app.use((error, req, res, next) => {
   logger.error('Unhandled error:', error);
 

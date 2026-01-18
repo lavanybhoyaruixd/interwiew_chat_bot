@@ -1,15 +1,13 @@
 // Smart Chat API with domain-specific interview coaching
 // Updated to route all AI calls through the backend so no API keys are exposed in the browser.
 
+import { API_BASE } from './base.js';
+
 class ChatAPI {
   constructor() {
-    // Read backend base URL from Vite env if provided, fallback to local dev API
-    this.backendURL = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL)
-      ? import.meta.env.VITE_API_BASE_URL
-      : 'http://localhost:5000/api';
-
+    this.backendURL = API_BASE;
     this.conversationState = {
-      phase: 'initial', // 'initial', 'domain-selection', 'level-selection', 'interview'
+      phase: 'initial',
       selectedDomain: null,
       selectedLevel: 'mid',
       conversationHistory: []
@@ -27,55 +25,73 @@ class ChatAPI {
       });
 
       const token = localStorage.getItem('hiremate_token');
-      const url = new URL(`${this.backendURL}/chat/stream`);
-      url.searchParams.set('question', message);
-      if (token) {
-        url.searchParams.set('token', token);
-      }
-
-      const eventSource = new EventSource(url.toString());
+      let retried = false;
       let fullResponse = '';
 
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === 'connected') {
-            // Connection established
-            return;
-          } else if (data.type === 'chunk') {
-            fullResponse += data.content;
-            onChunk(data.content, fullResponse);
-          } else if (data.type === 'done') {
-            // Stream completed
-            eventSource.close();
-            this.conversationState.conversationHistory.push({
-              sender: 'bot',
-              text: fullResponse,
-              timestamp: new Date()
-            });
-            onComplete(fullResponse);
-          } else if (data.type === 'error') {
-            eventSource.close();
-            onError(new Error(data.message || 'Streaming failed'));
+      const openSSE = (baseUrl) => {
+        const url = new URL(`${baseUrl}/chat/stream`);
+        url.searchParams.set('question', message);
+        if (token) url.searchParams.set('token', token);
+
+        const es = new EventSource(url.toString());
+
+        es.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'connected') return;
+            if (data.type === 'chunk') {
+              fullResponse += data.content;
+              onChunk(data.content, fullResponse);
+              return;
+            }
+            if (data.type === 'done') {
+              es.close();
+              this.conversationState.conversationHistory.push({
+                sender: 'bot',
+                text: fullResponse,
+                timestamp: new Date()
+              });
+              onComplete(fullResponse);
+              return;
+            }
+            if (data.type === 'error') {
+              es.close();
+              onError(new Error(data.message || 'Streaming failed'));
+            }
+          } catch (parseError) {
+            console.error('Error parsing SSE data:', parseError);
           }
-        } catch (parseError) {
-          console.error('Error parsing SSE data:', parseError);
-        }
+        };
+
+        es.onerror = () => {
+          es.close();
+          // Localhost fallback: swap 5001/5000 once
+          const isLocal = /localhost|127\.0\.0\.1/.test(baseUrl);
+          if (!retried && isLocal) {
+            retried = true;
+            const alt = baseUrl
+              .replace('http://localhost:5001', 'http://localhost:5000')
+              .replace('http://127.0.0.1:5001', 'http://127.0.0.1:5000')
+              .replace('http://localhost:5000', 'http://localhost:5001')
+              .replace('http://127.0.0.1:5000', 'http://127.0.0.1:5001');
+            if (alt !== baseUrl) {
+              openSSE(alt);
+              return;
+            }
+          }
+          onError(new Error('Streaming connection failed'));
+        };
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          if (es.readyState !== EventSource.CLOSED) {
+            es.close();
+            onError(new Error('Request timeout'));
+          }
+        }, 30000);
       };
 
-      eventSource.onerror = (error) => {
-        eventSource.close();
-        onError(error);
-      };
-
-      // Timeout after 30 seconds
-      setTimeout(() => {
-        if (eventSource.readyState !== EventSource.CLOSED) {
-          eventSource.close();
-          onError(new Error('Request timeout'));
-        }
-      }, 30000);
+      openSSE(this.backendURL);
 
     } catch (error) {
       console.error('❌ Streaming API error:', error);
@@ -94,7 +110,8 @@ class ChatAPI {
       });
 
       // Use backend smart chat endpoint to generate the response (no client-side keys)
-      const res = await fetch(`${this.backendURL}/chat/ask`, {
+      const endpoint = `${this.backendURL}/chat/ask`;
+      let res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -103,8 +120,32 @@ class ChatAPI {
             ? { Authorization: `Bearer ${localStorage.getItem('hiremate_token')}` }
             : {})
         },
-        body: JSON.stringify({ question: message })
+          body: JSON.stringify({ question: message })
       });
+
+      if (!res.ok) {
+        // Localhost fallback for 5001/5000
+        const isLocal = /http:\/\/(localhost|127\.0\.0\.1):5\d{3}\/api/.test(this.backendURL);
+        if (isLocal) {
+          const altBase = this.backendURL
+            .replace('http://localhost:5001', 'http://localhost:5000')
+            .replace('http://127.0.0.1:5001', 'http://127.0.0.1:5000')
+            .replace('http://localhost:5000', 'http://localhost:5001')
+            .replace('http://127.0.0.1:5000', 'http://127.0.0.1:5001');
+          if (altBase !== this.backendURL) {
+            res = await fetch(`${altBase}/chat/ask`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(localStorage.getItem('hiremate_token')
+                  ? { Authorization: `Bearer ${localStorage.getItem('hiremate_token')}` }
+                  : {})
+              },
+                body: JSON.stringify({ question: message })
+            });
+          }
+        }
+      }
 
       if (!res.ok) {
         throw new Error(`Backend error: ${res.status}`);

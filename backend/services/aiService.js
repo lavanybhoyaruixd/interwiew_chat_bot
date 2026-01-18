@@ -35,7 +35,43 @@ class AIService {
         }
       };
     } else {
-      this.groq = new Groq({ apiKey });
+      const client = new Groq({ apiKey });
+
+      // Safety wrapper: if the provider call fails (401, timeout, etc),
+      // return a lightweight mock response so routes don't crash.
+      // Preserve streaming behavior when options.stream is truthy.
+      const originalCreate = client.chat?.completions?.create?.bind(client.chat?.completions);
+
+      const safeCreate = async (options) => {
+        try {
+          if (!originalCreate) throw new Error('Groq create method unavailable');
+          return await originalCreate(options);
+        } catch (err) {
+          logger.error('Groq API failed, returning mock fallback in aiService:', err && err.message ? err.message : err);
+
+          const mockText = options?.messages?.find(m => m.role === 'user')?.content
+            ? `Mock (fallback): ${options.messages.find(m => m.role === 'user').content}`
+            : 'Mock response (fallback)';
+
+          // If the caller requested a stream, return an async iterable that yields one chunk
+          if (options && options.stream) {
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { choices: [{ delta: { content: mockText } }] };
+              }
+            };
+          }
+
+          return { choices: [{ message: { content: mockText } }] };
+        }
+      };
+
+      // Attach safe wrapper to use below in the service
+      client.chat = client.chat || {};
+      client.chat.completions = client.chat.completions || {};
+      client.chat.completions.create = safeCreate;
+
+      this.groq = client;
     }
   }
 

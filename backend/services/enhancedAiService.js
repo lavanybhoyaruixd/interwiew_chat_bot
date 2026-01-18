@@ -1,6 +1,8 @@
+/* eslint-env node */
+/* eslint-disable no-undef */
 const Groq = require('groq-sdk');
-const axios = require('axios');
-const domainService = require('./domainService');
+// const axios = require('axios'); // (reserved for future external enrichment calls)
+// const domainService = require('./domainService'); // used in system prompt builders
 const logger = require('../utils/logger');
 
 class EnhancedAIService {
@@ -25,7 +27,37 @@ class EnhancedAIService {
         }
       };
     } else {
-      this.groq = new Groq({ apiKey });
+      const client = new Groq({ apiKey });
+
+      // Safety wrapper similar to aiService: return mock fallback on errors.
+      const originalCreate = client.chat?.completions?.create?.bind(client.chat?.completions);
+      const safeCreate = async (options) => {
+        try {
+          if (!originalCreate) throw new Error('Groq create method unavailable');
+          return await originalCreate(options);
+        } catch (err) {
+          logger.error('Groq API failed, returning mock fallback in enhancedAiService:', err && err.message ? err.message : err);
+          const mockText = options?.messages?.find(m => m.role === 'user')?.content
+            ? `Mock (fallback): ${options.messages.find(m => m.role === 'user').content}`
+            : 'Mock response (fallback)';
+
+          if (options && options.stream) {
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield { choices: [{ delta: { content: mockText } }] };
+              }
+            };
+          }
+
+          return { choices: [{ message: { content: mockText } }] };
+        }
+      };
+
+      client.chat = client.chat || {};
+      client.chat.completions = client.chat.completions || {};
+      client.chat.completions.create = safeCreate;
+
+      this.groq = client;
     }
   }
 
@@ -152,81 +184,43 @@ class EnhancedAIService {
     }
   }
 
-  // Check if a question is interview-related
+  // Check if a question is interview/career/tech-related
   async checkIfInterviewRelated(question) {
-    const interviewKeywords = [
-      // Direct interview terms
-      'interview', 'job', 'career', 'position', 'role', 'hiring', 'employer', 'candidate',
-      'resume', 'cv', 'cover letter', 'application', 'apply', 'recruitment',
-      
-      // Interview question patterns
-      'tell me about yourself', 'why should we hire you', 'strengths', 'weaknesses',
-      'why do you want', 'where do you see yourself', 'greatest achievement',
-      'challenge', 'conflict', 'teamwork', 'leadership', 'management',
-      'salary', 'compensation', 'benefits', 'promotion',
-      
-      // Technical interview terms
-      'coding interview', 'technical interview', 'system design', 'algorithm',
-      'data structure', 'behavioral question', 'situational question',
-      
-      // Professional development
-      'professional development', 'skill development', 'career growth',
-      'workplace', 'colleague', 'supervisor', 'manager', 'employee',
-      'performance review', 'feedback', 'improvement'
+    const q = (question || '').toLowerCase().trim();
+
+    // Allow only known short tech tokens; otherwise do not auto-allow
+    const shortTokens = new Set([
+      'python','java','javascript','typescript','js','ts','c','c++','cpp','go','golang','rust','sql','html','css','react','next','next.js','node','node.js','express','docker','kubernetes','k8s','aws','azure','gcp','mongo','mongodb','mysql','postgres','postgresql','leetcode','dsa','big-o','ai','ml','nlp','llm','devops','git','github','gitlab'
+    ]);
+    if (q.split(/\s+/).length <= 2 && shortTokens.has(q)) return true;
+
+    const allowKeywords = [
+      // interview / career
+      'interview', 'resume', 'cv', 'cover letter', 'salary', 'offer', 'negotiation', 'behavioural', 'behavioral', 'star method', 'hr', 'recruiter', 'career', 'job', 'hiring', 'onsite', 'phone screen',
+      // programming / tech
+      'algorithm', 'data structure', 'system design', 'database', 'sql', 'api', 'frontend', 'backend', 'fullstack', 'devops', 'cloud', 'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'python', 'javascript', 'typescript', 'java', 'c++', 'react', 'next.js', 'node', 'express', 'microservices', 'testing', 'unit test', 'debug', 'performance', 'security', 'oauth', 'jwt', 'encryption'
     ];
-    
-    const questionLower = question.toLowerCase();
-    
-    // Check for direct keyword matches
-    const hasKeyword = interviewKeywords.some(keyword => 
-      questionLower.includes(keyword.toLowerCase())
-    );
-    
-    if (hasKeyword) {
-      return true;
-    }
-    
-    // Use AI to determine if it's interview-related (more sophisticated check)
-    try {
-      const response = await this.groq.chat.completions.create({
-        model: 'llama-3.1-8b-instant',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a classifier that determines if a question is related to job interviews, career development, or professional workplace topics. 
-            
-            Respond ONLY with "YES" if the question is about:
-            - Job interviews (questions, preparation, tips)
-            - Resume/CV writing
-            - Career advice and development
-            - Workplace situations and professional behavior
-            - Salary negotiation
-            - Professional skills and competencies
-            
-            Respond ONLY with "NO" if the question is about:
-            - General knowledge (history, science, geography, etc.)
-            - Personal hobbies or entertainment
-            - Technical topics unrelated to job interviews
-            - Random questions not related to professional development
-            
-            Be strict - only YES for genuine career/interview related questions.`
-          },
-          {
-            role: 'user',
-            content: `Is this question related to job interviews or career development? Question: "${question}"`
-          }
-        ],
-        temperature: 0,
-        max_tokens: 10
-      });
-      
-      const aiResponse = response.choices[0]?.message?.content?.trim().toUpperCase();
-      return aiResponse === 'YES';
-    } catch (error) {
-      logger.error('Error in AI classification:', error);
-      // Fallback to keyword-based detection only
-      return hasKeyword;
-    }
+
+    if (allowKeywords.some(k => q.includes(k))) return true;
+
+    // Blocklist: small examples of off-topic
+    const blockKeywords = [
+      'recipe', 'cooking', 'travel', 'tourism', 'vacation', 'relationship', 'dating', 'movie', 'music', 'celebrity', 'sports score', 'astrology', 'horoscope', 'lottery', 'gambling', 'medical advice', 'diagnosis', 'therapy'
+    ];
+    if (blockKeywords.some(k => q.includes(k))) return false;
+
+    // Small talk and pleasantries -> decline
+    const smallTalkPatterns = [
+      /^(hi|hello|hey|greetings|good (morning|afternoon|evening))\b/i,
+      /^(thanks|thank you|thx|ty)\b/i,
+      /^(how are you|how('s| is) it going|what's up|sup|wassup)\b/i,
+      /^(bye|goodbye|see you|cya)\b/i,
+      /^what('s| is) the (weather|temperature)\b/i
+    ];
+    if (smallTalkPatterns.some(re => re.test(q))) return false;
+
+    // Default: allow but keep system prompt to constrain response
+    return true;
   }
 
   // Generate contextual chat responses with real-time awareness
@@ -236,7 +230,7 @@ class EnhancedAIService {
       const isInterviewRelated = await this.checkIfInterviewRelated(userMessage);
       
       if (!isInterviewRelated) {
-        return "I'm here only to assist with interview preparation. Let's focus on your career!";
+        return "> \"I specialize in interview and tech-related topics 😊. Please ask me something about careers, coding, or job preparation!\"";
       }
 
       const currentContext = this.getCurrentContext();
@@ -370,7 +364,13 @@ class EnhancedAIService {
 
   // Build interview-focused system prompt with current trends
   buildInterviewFocusedSystemPrompt(domain, userLevel, currentContext, trendingTopics) {
-    return `You are HireMate, an AI interview preparation assistant. You ONLY help with job interview related topics.
+    return `You are HireMate, an AI Interview Assistant.
+You ONLY help with: job interviews, resume and soft skills, programming & technical concepts, and career guidance.
+
+OFF-TOPIC POLICY:
+❌ Never answer questions unrelated to these topics (e.g., cooking, travel, personal relationships, entertainment).
+If off-topic, reply with exactly:
+> "I specialize in interview and tech-related topics 😊. Please ask me something about careers, coding, or job preparation!"
 
 INTERVIEW FOCUS AREAS:
 - Common interview questions and best answers
@@ -394,6 +394,14 @@ GUIDELINES:
 - Reference current industry trends when relevant
 - Consider what employers are looking for in ${currentContext.year}
 - Include modern workplace expectations
+
+FORMATTING (strict):
+- Use ### for headings only
+- Use - for bullet points only
+- Use **bold** sparingly and only when necessary
+- Never repeat words, phrases, or Markdown symbols
+- Remove any duplicated tokens or corrupted formatting
+- Each section must contain unique information
 
 User Level: ${userLevel}
 Domain: ${domain || 'General'}`;

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Animation Test</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 min-h-screen">
+  <div class="h-screen flex items-center justify-center">
+    <h1 class="text-4xl text-white">Scroll Down to See Animation</h1>
+  </div>
+
+  <div class="min-h-screen flex items-center justify-center">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto p-8">
+      <!-- Card 1 -->
+      <div class="bg-gradient-to-br from-slate-800/80 to-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-8 shadow-2xl">
+        <div class="text-5xl font-bold text-cyan-400 mb-2" id="counter1">0</div>
+        <h3 class="text-lg font-semibold text-white">Total Users</h3>
+        <p class="text-sm text-slate-400">and growing</p>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="bg-gradient-to-br from-slate-800/80 to-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-8 shadow-2xl">
+        <div class="text-5xl font-bold text-purple-400 mb-2" id="counter2">0</div>
+        <h3 class="text-lg font-semibold text-white">Daily Sessions</h3>
+        <p class="text-sm text-slate-400">active users</p>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="bg-gradient-to-br from-slate-800/80 to-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-8 shadow-2xl">
+        <div class="text-5xl font-bold text-amber-400 mb-2" id="counter3">0</div>
+        <h3 class="text-lg font-semibold text-white">Interviews Taken</h3>
+        <p class="text-sm text-slate-400">and counting</p>
+      </div>
+
+      <!-- Card 4 -->
+      <div class="bg-gradient-to-br from-slate-800/80 to-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-8 shadow-2xl">
+        <div class="text-5xl font-bold text-emerald-400 mb-2" id="counter4">0</div>
+        <h3 class="text-lg font-semibold text-white">Avg Feedback Score</h3>
+        <p class="text-sm text-slate-400">from users</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function animateCounter(element, target, duration = 2000, formatK = false, decimals = 1, suffix = '') {
+      let startTime = null;
+      let animationFrame = null;
+      
+      const easeOutExpo = (t) => {
+        return t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+      };
+
+      const formatNumber = (num) => {
+        if (formatK && target >= 1000) {
+          return (num / 1000).toFixed(decimals) + 'K';
+        }
+        if (target < 10 && target % 1 !== 0) {
+          return num.toFixed(decimals);
+        }
+        return Math.floor(num).toLocaleString();
+      };
+
+      const animate = (timestamp) => {
+        if (!startTime) startTime = timestamp;
+        
+        const elapsed = timestamp - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        const easedProgress = easeOutExpo(progress);
+        
+        const currentCount = easedProgress * target;
+        element.textContent = formatNumber(currentCount) + suffix;
+        
+        if (progress < 1) {
+          animationFrame = requestAnimationFrame(animate);
+        } else {
+          element.textContent = formatNumber(target) + suffix;
+        }
+      };
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              startTime = null;
+              animationFrame = requestAnimationFrame(animate);
+              observer.unobserve(element);
+            }
+          });
+        },
+        { threshold: 0.1, rootMargin: '0px 0px -100px 0px' }
+      );
+
+      observer.observe(element);
+    }
+
+    // Initialize counters
+    animateCounter(document.getElementById('counter1'), 5200, 2000, true, 1);
+    animateCounter(document.getElementById('counter2'), 12400, 2000, true, 1);
+    animateCounter(document.getElementById('counter3'), 8900, 2000, true, 1);
+    animateCounter(document.getElementById('counter4'), 4.6, 2000, false, 1, '/5');
+
+    console.log('✅ Animation test initialized. Scroll down to see animations!');
+  </script>
+</body>
+</html>

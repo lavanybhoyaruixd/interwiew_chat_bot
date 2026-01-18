@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const InterviewSession = require('../models/InterviewSession');
 const Question = require('../models/Question');
-const { authenticate, checkCredits } = require('../middleware/auth');
+const { authenticate, optionalAuth, checkCredits } = require('../middleware/auth');
 const {
   validateCreateSession,
   validateSubmitAnswer
@@ -436,8 +436,8 @@ router.post('/sessions/:sessionId/complete', authenticate, async (req, res) => {
 
 // @route   POST /api/interview/upload-resume
 // @desc    Upload and process resume
-// @access  Private
-router.post('/upload-resume', authenticate, upload.single('resume'), async (req, res) => {
+// @access  Public (with optional auth)
+router.post('/upload-resume', optionalAuth, upload.single('resume'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({

@@ -4,6 +4,7 @@ const path = require('path');
 const aiService = require('./aiService');
 const sessionFileService = require('./sessionFileService');
 const logger = require('../utils/logger');
+const { v4: uuidv4 } = require('uuid');
 
 class ResumeService {
   constructor() {
@@ -39,408 +40,214 @@ class ResumeService {
   }
 
   // Extract text from PDF
-  async extractTextFromPDF(filePath) {
+  async extractTextFromBuffer(buffer) {
     try {
-      const dataBuffer = fs.readFileSync(filePath);
-      const pdfData = await pdf(dataBuffer);
-      
+      const pdfData = await pdf(buffer);
       if (!pdfData.text || pdfData.text.trim().length === 0) {
         throw new Error('No text content found in PDF');
       }
-
-      logger.info(`Successfully extracted text from PDF: ${pdfData.text.length} characters`);
       return pdfData.text;
     } catch (error) {
       logger.error('Error extracting text from PDF:', error);
-      throw new Error('Unable to extract text from PDF file');
+      throw new Error('Failed to extract text from PDF: ' + error.message);
     }
   }
 
-  // Process uploaded resume with enhanced file handling
-  async processResume(file, userId) {
-    let filePath = null;
-    
+  // Process resume with AI analysis
+  async processResumeInMemory(file, userId = 'anonymous') {
     try {
-      // Validate file
-      const validationErrors = this.validateFile(file);
-      if (validationErrors.length > 0) {
-        throw new Error(validationErrors.join(', '));
+      // Ensure we have a buffer
+      if (!file.buffer && file.path) {
+        // If buffer is not available but path is, read the file
+        file.buffer = fs.readFileSync(file.path);
+      } else if (!file.buffer && file.data) {
+        // If data is available (from multer memory storage)
+        file.buffer = file.data;
       }
 
-      // Generate unique filename with additional security
-      const timestamp = Date.now();
-      const randomSuffix = Math.random().toString(36).substring(2, 8);
-      const sanitizedName = file.originalname
-        .replace(/[^a-zA-Z0-9.-]/g, '_')
-        .substring(0, 50); // Limit filename length
-      const filename = `${userId}_${timestamp}_${randomSuffix}_${sanitizedName}`;
-      filePath = path.join(__dirname, '../uploads', filename);
-
-      // Save file temporarily with enhanced security
-      await this.saveFileSecurely(file.buffer, filePath);
-
-      try {
-        // Extract text from PDF with better error handling
-        const extractedText = await this.extractTextFromPDF(filePath);
-        
-        // Validate extracted text
-        if (!extractedText || extractedText.trim().length < 50) {
-          throw new Error('Resume appears to be empty or corrupted');
-        }
-
-        // Use AI to extract structured information
-        const extractedInfo = await aiService.extractResumeInfo(extractedText);
-
-        // Generate processing summary
-        const processingSummary = this.generateProcessingSummary(extractedText, extractedInfo);
-
-        const processedData = {
-          filename: file.originalname,
-          fileSize: file.size,
-          mimeType: file.mimetype,
-          extractedText: extractedText.substring(0, 5000), // Limit stored text
-          skills: extractedInfo.skills || [],
-          experience: extractedInfo.experience || '',
-          education: extractedInfo.education || '',
-          currentRole: extractedInfo.currentRole || '',
-          industries: extractedInfo.industries || [],
-          yearsOfExperience: extractedInfo.yearsOfExperience || '0',
-          keyAchievements: extractedInfo.keyAchievements || [],
-          processingSummary,
-          processedAt: new Date(),
-          textLength: extractedText.length,
-          processingVersion: '1.0'
-        };
-
-        logger.info(`Successfully processed resume for user ${userId}: ${processingSummary.totalSkills} skills, ${processingSummary.textLength} chars`);
-        return processedData;
-
-      } finally {
-        // Always clean up temporary file
-        if (filePath) {
-          await this.cleanupFileAsync(filePath);
-        }
+      if (!file.buffer) {
+        throw new Error('No file data available for processing');
       }
+
+      // Extract text from PDF
+      const resumeText = await this.extractTextFromBuffer(file.buffer);
+      
+      // Extract basic info
+      const basicInfo = this.extractBasicInfo(resumeText);
+      
+      // Perform AI analysis
+      const aiAnalysis = await this.analyzeWithAI(resumeText);
+      
+      // Extract structured data from AI analysis
+      const skills = aiAnalysis.skills?.technical || [];
+      const softSkills = aiAnalysis.skills?.soft || [];
+      const allSkills = [...skills, ...softSkills];
+      
+      // Calculate experience level
+      let yearsOfExperience = 0;
+      let currentRole = aiAnalysis.suggested_roles?.[0] || 'Software Developer';
+      
+      // Try to extract experience from text
+      const experienceMatch = resumeText.match(/(\d+)\+?\s*years?\s*(?:of\s*)?experience/i);
+      if (experienceMatch) {
+        yearsOfExperience = parseInt(experienceMatch[1]);
+      }
+      
+      // Extract industries (simplified)
+      const industries = [];
+      if (resumeText.toLowerCase().includes('software') || resumeText.toLowerCase().includes('technology')) {
+        industries.push('Technology');
+      }
+      if (resumeText.toLowerCase().includes('finance') || resumeText.toLowerCase().includes('banking')) {
+        industries.push('Finance');
+      }
+      if (resumeText.toLowerCase().includes('healthcare') || resumeText.toLowerCase().includes('medical')) {
+        industries.push('Healthcare');
+      }
+
+      // Create key achievements (simplified extraction)
+      const keyAchievements = [];
+      const achievementPatterns = [
+        /achieved?\s+([^.!?]+[.!?])/gi,
+        /improved?\s+([^.!?]+[.!?])/gi,
+        /developed?\s+([^.!?]+[.!?])/gi,
+        /led?\s+([^.!?]+[.!?])/gi
+      ];
+      
+      achievementPatterns.forEach(pattern => {
+        let match;
+        while ((match = pattern.exec(resumeText)) !== null && keyAchievements.length < 3) {
+          const achievement = match[1].trim();
+          if (achievement.length > 10 && !keyAchievements.includes(achievement)) {
+            keyAchievements.push(achievement);
+          }
+        }
+      });
+
+      const processedAt = new Date();
+      
+      // Response needs to satisfy legacy controllers (metadata/basicInfo/extractedText/aiAnalysis)
+      // AND new resume analyzer expectations (flattened fields).
+      const response = {
+        // Flattened fields for newer routes
+        filename: file.originalname || 'resume.pdf',
+        fileSize: file.size || file.buffer.length,
+        skills: allSkills,
+        experience: aiAnalysis.experience_level || 'Entry Level',
+        education: basicInfo.education || 'Not specified',
+        currentRole: currentRole,
+        industries: industries.length > 0 ? industries : ['Technology'],
+        yearsOfExperience: yearsOfExperience,
+        keyAchievements: keyAchievements,
+        processedAt: processedAt.toISOString(),
+        processingSummary: {
+          textLength: resumeText.length,
+          totalSkills: allSkills.length,
+          hasExperience: yearsOfExperience > 0,
+          hasEducation: basicInfo.education !== 'Not found',
+          aiAnalysis: aiAnalysis
+        },
+        textLength: resumeText.length,
+        processingMethod: 'memory',
+        sessionInfo: {
+          userId: userId,
+          analysisId: uuidv4()
+        },
+        // Legacy / controller expected structure
+        metadata: {
+          filename: file.originalname || 'resume.pdf',
+          size: file.size || file.buffer.length,
+          mimeType: file.mimetype || 'application/pdf',
+          extractedAt: processedAt.toISOString(),
+          analysisId: uuidv4()
+        },
+        basicInfo: basicInfo,
+        extractedText: resumeText,
+        aiAnalysis: aiAnalysis
+      };
+
+      return response;
 
     } catch (error) {
       logger.error('Error processing resume:', error);
-      
-      // Emergency cleanup
-      if (filePath) {
-        await this.cleanupFileAsync(filePath);
-      }
-      
-      throw error;
+      throw new Error(`Failed to process resume: ${error.message}`);
     }
   }
-
-  // Save file to disk
-  async saveFile(buffer, filePath) {
-    return new Promise((resolve, reject) => {
-      // Ensure upload directory exists
-      const uploadDir = path.dirname(filePath);
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-
-      fs.writeFile(filePath, buffer, (error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(filePath);
-        }
-      });
-    });
-  }
-
-  // Clean up temporary file
-  cleanupFile(filePath) {
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        logger.debug(`Cleaned up temporary file: ${filePath}`);
-      }
-    } catch (error) {
-      logger.warn(`Failed to cleanup file ${filePath}:`, error.message);
+  
+  // Extract basic information from resume text
+  extractBasicInfo(text) {
+    // Simple regex patterns for basic info extraction
+    const emailMatch = text.match(/[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+    const phoneMatch = text.match(/(\+\d{1,3}[\s-]?)?(\d[\s-]?){10,}/);
+    const nameMatch = text.match(/^[A-Z][a-z]+(?: [A-Z][a-z]+)+/m);
+    
+    // Extract education information
+    let education = 'Not found';
+    const educationKeywords = ['bachelor', 'master', 'phd', 'degree', 'university', 'college', 'b.tech', 'm.tech', 'b.e', 'm.e', 'b.sc', 'm.sc'];
+    const educationPattern = new RegExp(`(${educationKeywords.join('|')})[^.!?]*[.!?]`, 'gi');
+    const educationMatch = text.match(educationPattern);
+    if (educationMatch) {
+      education = educationMatch[0].trim();
     }
-  }
-
-  // Generate interview questions based on resume
-  async generateQuestionsFromResume(resumeData, jobRole, difficulty = 'medium', count = 5) {
-    try {
-      const questions = await aiService.generateQuestions(resumeData, jobRole, difficulty, count);
-      
-      // Add additional metadata
-      const enhancedQuestions = questions.map(q => ({
-        ...q,
-        jobRoles: [jobRole],
-        skills: resumeData.skills || [],
-        estimatedTime: this.estimateQuestionTime(q.category, q.difficulty),
-        source: 'resume-based'
-      }));
-
-      logger.info(`Generated ${enhancedQuestions.length} questions from resume for role: ${jobRole}`);
-      return enhancedQuestions;
-
-    } catch (error) {
-      logger.error('Error generating questions from resume:', error);
-      throw new Error('Failed to generate questions from resume');
-    }
-  }
-
-  // Estimate time needed for question based on category and difficulty
-  estimateQuestionTime(category, difficulty) {
-    const baseTimes = {
-      technical: 8,
-      behavioral: 5,
-      situational: 6,
-      'case-study': 15,
-      general: 4
-    };
-
-    const difficultyMultipliers = {
-      easy: 0.8,
-      medium: 1.0,
-      hard: 1.5
-    };
-
-    const baseTime = baseTimes[category] || 5;
-    const multiplier = difficultyMultipliers[difficulty] || 1.0;
-
-    return Math.round(baseTime * multiplier);
-  }
-
-  // Extract skills from text using simple pattern matching (fallback)
-  extractSkillsFromText(text) {
-    const commonSkills = [
-      // Programming languages
-      'javascript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'swift',
-      'typescript', 'kotlin', 'scala', 'r', 'matlab', 'sql',
-      
-      // Web technologies
-      'html', 'css', 'react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask',
-      'spring', 'laravel', 'wordpress', 'jquery',
-      
-      // Databases
-      'mysql', 'postgresql', 'mongodb', 'redis', 'elasticsearch', 'sqlite', 'oracle',
-      
-      // Cloud platforms
-      'aws', 'azure', 'gcp', 'google cloud', 'heroku', 'digitalocean',
-      
-      // Tools and frameworks
-      'git', 'docker', 'kubernetes', 'jenkins', 'terraform', 'ansible',
-      
-      // Soft skills
-      'leadership', 'communication', 'teamwork', 'problem solving', 'project management',
-      'agile', 'scrum', 'analytical thinking'
-    ];
-
-    const foundSkills = [];
-    const lowerText = text.toLowerCase();
-
-    commonSkills.forEach(skill => {
-      if (lowerText.includes(skill.toLowerCase())) {
-        foundSkills.push(skill);
-      }
-    });
-
-    return [...new Set(foundSkills)]; // Remove duplicates
-  }
-
-  // Get file stats
-  getFileStats(filePath) {
-    try {
-      const stats = fs.statSync(filePath);
-      return {
-        size: stats.size,
-        created: stats.ctime,
-        modified: stats.mtime
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  // Enhanced secure file saving
-  async saveFileSecurely(buffer, filePath) {
-    return new Promise((resolve, reject) => {
-      try {
-        // Ensure upload directory exists with proper permissions
-        const uploadDir = path.dirname(filePath);
-        if (!fs.existsSync(uploadDir)) {
-          fs.mkdirSync(uploadDir, { recursive: true, mode: 0o755 });
-        }
-
-        // Write file with restricted permissions
-        fs.writeFile(filePath, buffer, { mode: 0o644 }, (error) => {
-          if (error) {
-            logger.error(`Failed to save file ${filePath}:`, error);
-            reject(error);
-          } else {
-            logger.debug(`File saved securely: ${filePath}`);
-            resolve(filePath);
-          }
-        });
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
-  // Async file cleanup
-  async cleanupFileAsync(filePath) {
-    return new Promise((resolve) => {
-      try {
-        if (fs.existsSync(filePath)) {
-          fs.unlink(filePath, (error) => {
-            if (error) {
-              logger.warn(`Failed to cleanup file ${filePath}:`, error.message);
-            } else {
-              logger.debug(`Cleaned up temporary file: ${filePath}`);
-            }
-            resolve();
-          });
-        } else {
-          resolve();
-        }
-      } catch (error) {
-        logger.warn(`Error during file cleanup ${filePath}:`, error.message);
-        resolve();
-      }
-    });
-  }
-
-  // Generate processing summary
-  generateProcessingSummary(extractedText, extractedInfo) {
+    
     return {
-      textLength: extractedText.length,
-      totalSkills: extractedInfo.skills?.length || 0,
-      hasExperience: !!(extractedInfo.experience && extractedInfo.experience.length > 10),
-      hasEducation: !!(extractedInfo.education && extractedInfo.education.length > 5),
-      hasCurrentRole: !!(extractedInfo.currentRole && extractedInfo.currentRole !== 'Not specified'),
-      estimatedYears: extractedInfo.yearsOfExperience || '0',
-      industries: extractedInfo.industries?.length || 0,
-      achievements: extractedInfo.keyAchievements?.length || 0,
-      processingSuccess: true
+      name: nameMatch ? nameMatch[0] : 'Not found',
+      email: emailMatch ? emailMatch[0] : 'Not found',
+      phone: phoneMatch ? phoneMatch[0] : 'Not found',
+      education: education,
+      textLength: text.length,
+      wordCount: text.split(/\s+/).length
     };
   }
-
-  // Process resume from memory (without saving to disk)
-  async processResumeInMemory(file, userId) {
+  
+  // Enhanced AI analysis using Groq
+  async analyzeWithAI(resumeText) {
     try {
-      // Validate file
-      const validationErrors = this.validateFile(file);
-      if (validationErrors.length > 0) {
-        throw new Error(validationErrors.join(', '));
-      }
-
-      // Extract text directly from buffer
-      const pdfData = await pdf(file.buffer);
+      const prompt = `Analyze the following resume and provide detailed insights:
       
-      if (!pdfData.text || pdfData.text.trim().length < 50) {
-        throw new Error('Resume appears to be empty or corrupted');
-      }
+${resumeText.substring(0, 8000)}  // Limit text length for the API
 
-      const extractedText = pdfData.text;
-      logger.info(`Extracted text from PDF in memory: ${extractedText.length} characters`);
+Provide analysis in the following JSON format:
+{
+  "summary": "Brief professional summary",
+  "strengths": ["strength1", "strength2", ...],
+  "improvement_areas": ["area1", "area2", ...],
+  "skills": {
+    "technical": ["skill1", "skill2", ...],
+    "soft": ["skill1", "skill2", ...]
+  },
+  "experience_level": "Junior/Mid/Senior/Executive",
+  "suggested_roles": ["Role 1", "Role 2", ...],
+  "missing_keywords": ["keyword1", "keyword2", ...]
+}`;
 
-      // Use AI to extract structured information
-      const extractedInfo = await aiService.extractResumeInfo(extractedText);
-
-      // Generate processing summary
-      const processingSummary = this.generateProcessingSummary(extractedText, extractedInfo);
-
-      const processedData = {
-        filename: file.originalname,
-        fileSize: file.size,
-        mimeType: file.mimetype,
-        extractedText: extractedText.substring(0, 5000),
-        skills: extractedInfo.skills || [],
-        experience: extractedInfo.experience || '',
-        education: extractedInfo.education || '',
-        currentRole: extractedInfo.currentRole || '',
-        industries: extractedInfo.industries || [],
-        yearsOfExperience: extractedInfo.yearsOfExperience || '0',
-        keyAchievements: extractedInfo.keyAchievements || [],
-        processingSummary,
-        processedAt: new Date(),
-        textLength: extractedText.length,
-        processingVersion: '1.0',
-        processingMethod: 'in-memory'
-      };
-
-      logger.info(`Successfully processed resume in memory for user ${userId}`);
-      return processedData;
-
-    } catch (error) {
-      logger.error('Error processing resume in memory:', error);
-      throw error;
-    }
-  }
-
-  // Process resume with session-based file management
-  async processResumeForSession(file, userId, sessionId = null) {
-    try {
-      // Validate file
-      const validationErrors = this.validateFile(file);
-      if (validationErrors.length > 0) {
-        throw new Error(validationErrors.join(', '));
-      }
-
-      // Save file with session management
-      const fileInfo = await sessionFileService.saveSessionFile(file, userId, sessionId);
-      
-      try {
-        // Extract text from saved file
-        const extractedText = await this.extractTextFromPDF(fileInfo.filePath);
-        
-        // Validate extracted text
-        if (!extractedText || extractedText.trim().length < 50) {
-          throw new Error('Resume appears to be empty or corrupted');
-        }
-
-        // Use AI to extract structured information
-        const extractedInfo = await aiService.extractResumeInfo(extractedText);
-
-        // Generate processing summary
-        const processingSummary = this.generateProcessingSummary(extractedText, extractedInfo);
-
-        const processedData = {
-          filename: file.originalname,
-          fileSize: file.size,
-          mimeType: file.mimetype,
-          extractedText: extractedText.substring(0, 5000),
-          skills: extractedInfo.skills || [],
-          experience: extractedInfo.experience || '',
-          education: extractedInfo.education || '',
-          currentRole: extractedInfo.currentRole || '',
-          industries: extractedInfo.industries || [],
-          yearsOfExperience: extractedInfo.yearsOfExperience || '0',
-          keyAchievements: extractedInfo.keyAchievements || [],
-          processingSummary,
-          processedAt: new Date(),
-          textLength: extractedText.length,
-          processingVersion: '1.0',
-          processingMethod: 'session-based',
-          sessionInfo: {
-            fileKey: sessionId || `user_${userId}_${Date.now()}`,
-            userId: userId,
-            sessionId: sessionId
+      const response = await aiService.groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert resume analyzer. Provide detailed, constructive feedback on resumes. Always respond with valid JSON.'
+          },
+          {
+            role: 'user',
+            content: prompt
           }
-        };
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+        response_format: { type: 'json_object' }
+      });
 
-        logger.info(`Successfully processed resume for session: ${sessionId || 'pending'}, user: ${userId}`);
-        return processedData;
-
-      } catch (processingError) {
-        // If processing fails, clean up the file
-        await sessionFileService.deleteSessionFile(sessionId || `user_${userId}_${Date.now()}`);
-        throw processingError;
-      }
-
+      // Parse the AI response
+      const aiResponse = response.choices[0].message.content;
+      return JSON.parse(aiResponse);
+      
     } catch (error) {
-      logger.error('Error processing resume for session:', error);
-      throw error;
+      logger.error('AI analysis failed:', error);
+      return {
+        error: 'AI analysis failed',
+        details: error.message
+      };
     }
   }
 
@@ -452,6 +259,62 @@ class ResumeService {
   // End session and schedule file cleanup
   endResumeSession(sessionId, immediate = false) {
     return sessionFileService.endInterviewSession(sessionId, immediate);
+  }
+
+  // Generate interview questions based on resume data
+  async generateQuestionsFromResume(resumeData, jobRole = 'Software Developer', difficulty = 'medium', count = 3) {
+    try {
+      // Use the aiService to generate questions
+      const aiService = require('./aiService');
+      
+      // Prepare resume data for question generation
+      const resumeContext = {
+        skills: resumeData.skills || [],
+        experience: resumeData.experience || [],
+        education: resumeData.education || [],
+        currentRole: resumeData.currentRole || jobRole,
+        industries: resumeData.industries || [],
+        yearsOfExperience: resumeData.yearsOfExperience || 0
+      };
+
+      const questions = await aiService.generateQuestions(resumeContext, jobRole, difficulty, count);
+      
+      // Format questions for response
+      return questions.map((q, index) => ({
+        id: `q_${index + 1}`,
+        question: q,
+        difficulty: difficulty,
+        category: 'technical',
+        type: 'behavioral'
+      }));
+      
+    } catch (error) {
+      logger.error('Error generating questions from resume:', error);
+      // Return fallback questions
+      return [
+        {
+          id: 'q_1',
+          question: `Can you tell me about your experience in ${jobRole} role?`,
+          difficulty: 'easy',
+          category: 'experience',
+          type: 'behavioral'
+        },
+        {
+          id: 'q_2', 
+          question: 'What are your key strengths and how do they apply to this role?',
+          difficulty: 'medium',
+          category: 'strengths',
+          type: 'behavioral'
+        },
+        {
+          id: 'q_3',
+          question: 'Describe a challenging project you worked on and how you overcame difficulties.',
+          difficulty: 'medium',
+          category: 'problem-solving',
+          type: 'behavioral'
+        }
+      ];
+    }
   }
 
   // Clean up old temporary files (scheduled cleanup)

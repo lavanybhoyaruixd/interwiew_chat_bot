@@ -1,43 +1,67 @@
 // src/Chatbot.jsx
 // Dark Chatbot component with Orb background + real-time typing effect
 import { useState, useRef, useEffect } from 'react';
+import MarkdownView from './components/MarkdownView';
 import Orb from './components/Orb';
-import { getChatResponse, getChatResponseStreaming } from './api/chatAPI';
+import { getChatResponseStreaming, getChatResponse } from './api/chatAPI';
+import { useChat } from './contexts/ChatContext';
 import './chatbot.css';
 
+// Safely get the chat context with a fallback
+const useSafeChat = () => {
+  try {
+    return useChat();
+  } catch (error) {
+    console.error('Error accessing chat context:', error);
+    return {
+      messages: [{ text: "Hi! I'm HireMate, your interview assistant. What would you like to prepare today?", sender: "bot" }],
+      sendMessage: (msg) => console.log('Message not sent - context error:', msg)
+    };
+  }
+};
+
 export default function Chatbot() {
-  // State for storing chat messages
-  const [messages, setMessages] = useState([
+  // Get chat context with safe fallback
+  const { messages: contextMessages, sendMessage } = useSafeChat();
+  
+  // Local state for UI
+  const [localMessages, setLocalMessages] = useState([
     { text: "Hi! I'm HireMate, your interview assistant. What would you like to prepare today?", sender: "bot" },
   ]);
+  // Safe local setMessages fallback (context does not expose setMessages)
+  const setMessages = (updater) => {
+    setLocalMessages(prev => (typeof updater === 'function' ? updater(prev) : updater));
+  };
+  
+  // Use context messages if available, otherwise fall back to local state
+  const messages = Array.isArray(contextMessages) && contextMessages.length > 0 
+    ? contextMessages 
+    : localMessages;
   // State for input field
   const [input, setInput] = useState("");
   // State for user credits (e.g., 5 free questions)
   const [credits, setCredits] = useState(100);
   // Example options for user to select
-  const [options, setOptions] = useState([
+  const [options] = useState([
     "Tell me about yourself",
     "What are your strengths?",
     "Why should we hire you?",
     "Describe a challenge you faced"
   ]);
-  // State for upload progress and error
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState("");
+  // Removed resume upload UI and context from Chatbot
   // Typing indicator / lock while sending
   const [isTyping, setIsTyping] = useState(false);
   // State for speech recognition
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef(null);
+  // const [listening] = useState(false); // removed unused state
+  // const recognitionRef = useRef(null); // disabled
 
   // Ref for chat messages container
   const messagesEndRef = useRef(null);
 
-  // Simple text formatter function
-  const formatBotText = (text) => {
-    if (!text || typeof text !== 'string') return text;
-    // Convert * bullets to • bullets
-    return text.replace(/^\* /gm, '• ');
+  // Render markdown using reusable component
+  const renderBotMarkdown = (text) => {
+    if (!text || typeof text !== 'string') return null;
+    return <MarkdownView>{text}</MarkdownView>;
   };
 
   // Auto-scroll to bottom when messages change
@@ -48,43 +72,32 @@ export default function Chatbot() {
   }, [messages]);
 
   // Real-time typing helper: progressively updates the last bot message
-  const typeOut = async (fullText, appendDelay = 12) => {
-    return new Promise((resolve) => {
-      let i = 0;
-      setMessages((prev) => [...prev, { text: '', sender: 'bot' }]);
-      const indexOfBot = messages.length + 1; // after pushing user msg and placeholder
-
-      const tick = () => {
-        i = Math.min(i + Math.max(1, Math.floor(fullText.length / 200)), fullText.length);
-        const next = fullText.slice(0, i);
-        setMessages((prev) => {
-          const copy = [...prev];
-          copy[copy.length - 1] = { text: next, sender: 'bot' };
-          return copy;
-        });
-        if (i < fullText.length) {
-          setTimeout(tick, appendDelay);
-        } else {
-          resolve();
-        }
-      };
-      tick();
-    });
-  };
+  // Removed legacy typeOut animation (streaming covers typing effect)
 
   // Handles sending a message with real-time streaming
   const handleSend = async (customInput) => {
     const value = typeof customInput === 'string' ? customInput : input;
     if (!value.trim() || credits <= 0 || isTyping) return;
 
-    const userMsg = { text: value, sender: "user" };
-    setMessages((prev) => [...prev, userMsg]);
+    const userMsg = { role: 'user', content: value };
+    
+    // Use context's sendMessage if available, otherwise use local state
+    if (typeof sendMessage === 'function') {
+      sendMessage(userMsg);
+    } else {
+      setLocalMessages(prev => [...prev, { text: value, sender: 'user' }]);
+    }
+    
     setInput("");
-    setCredits((c) => c - 1); // Decrement credits
+    setCredits(c => c - 1);
     setIsTyping(true);
 
-    // Add placeholder bot message that will be updated in real-time
-    setMessages((prev) => [...prev, { text: '', sender: 'bot' }]);
+    // Add placeholder bot message
+    if (typeof sendMessage === 'function') {
+      sendMessage({ role: 'assistant', content: '' });
+    } else {
+      setLocalMessages(prev => [...prev, { text: '', sender: 'bot' }]);
+    }
 
     try {
       // Use streaming response for real-time effect
@@ -92,71 +105,99 @@ export default function Chatbot() {
         value,
         // onChunk: update the last bot message with new content
         (chunk, fullResponse) => {
-          setMessages((prev) => {
-            const copy = [...prev];
-            copy[copy.length - 1] = { text: fullResponse, sender: 'bot' };
-            return copy;
-          });
-        },
-        // onComplete: streaming finished
-        (fullResponse) => {
-          setIsTyping(false);
-        },
-        // onError: handle streaming errors
-        (error) => {
-          console.error('Streaming error:', error);
-          setMessages((prev) => {
-            const copy = [...prev];
-            copy[copy.length - 1] = { 
-              text: "Error connecting to AI service. Please try again.", 
+          const updateLastMessage = (prev) => {
+            const lastIdx = prev.length - 1;
+            if (lastIdx < 0) return prev;
+            
+            const updated = [...prev];
+            updated[lastIdx] = { 
+              ...updated[lastIdx], 
+              text: fullResponse || chunk,
               sender: 'bot' 
             };
-            return copy;
-          });
-          setIsTyping(false);
-        }
+            return updated;
+          };
+          
+          if (typeof sendMessage === 'function') {
+            setMessages(prev => updateLastMessage(prev));
+          } else {
+            setLocalMessages(prev => updateLastMessage(prev));
+          }
+        },
+        // onComplete: streaming finished
+        () => setIsTyping(false),
+        // onError: handle streaming errors -> fallback to non-streaming
+        async (error) => {
+          console.error('Streaming error:', error);
+          try {
+            const fallback = await getChatResponse(value, undefined);
+            const updateMessage = (prev) => {
+              const lastIdx = prev.length - 1;
+              if (lastIdx < 0) return prev;
+              
+              const updated = [...prev];
+              updated[lastIdx] = { 
+                ...updated[lastIdx],
+                text: fallback,
+                sender: 'bot' 
+              };
+              return updated;
+            };
+            
+            if (typeof sendMessage === 'function') {
+              setMessages(prev => updateMessage(prev));
+            } else {
+              setLocalMessages(prev => updateMessage(prev));
+            }
+          } catch (err) {
+            console.error('Fallback error:', err);
+            const errorMessage = { 
+              role: 'assistant', 
+              content: "Error connecting to AI service. Please try again." 
+            };
+            
+            if (typeof sendMessage === 'function') {
+              sendMessage(errorMessage);
+            } else {
+              setLocalMessages(prev => [...prev, { 
+                text: errorMessage.content, 
+                sender: 'bot' 
+              }]);
+            }
+          } finally {
+            setIsTyping(false);
+          }
+        },
+        undefined
       );
     } catch (error) {
       console.error('Chat error:', error);
-      setMessages((prev) => {
-        const copy = [...prev];
-        copy[copy.length - 1] = { 
-          text: "Error connecting to AI service. Please try again.", 
-          sender: 'bot' 
-        };
-        return copy;
-      });
-      setIsTyping(false);
+      try {
+        const fallback = await getChatResponse(value, undefined);
+        setMessages((prev) => {
+          const copy = [...prev];
+          copy[copy.length - 1] = { text: fallback, sender: 'bot' };
+          return copy;
+        });
+      } catch {
+        setMessages((prev) => {
+          const copy = [...prev];
+          copy[copy.length - 1] = { 
+            text: "Error connecting to AI service. Please try again.", 
+            sender: 'bot' 
+          };
+          return copy;
+        });
+      } finally {
+        setIsTyping(false);
+      }
     }
   };
 
+  // Removed resume upload handlers (moved to Resume Analyzer page)
+
   // Handle SpeechRecognition
-  const handleMicClick = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Speech recognition is not supported in this browser.');
-      return;
-    }
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!recognitionRef.current) {
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.lang = 'en-US';
-      recognitionRef.current.interimResults = false;
-      recognitionRef.current.maxAlternatives = 1;
-      recognitionRef.current.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        setInput(transcript);
-        setListening(false);
-      };
-      recognitionRef.current.onerror = () => {
-        setListening(false);
-      };
-      recognitionRef.current.onend = () => {
-        setListening(false);
-      };
-    }
-    setListening(true);
-    recognitionRef.current.start();
-  };
+  // Speech recognition temporarily disabled to reduce unused code warnings
 
   // Handle Text-to-Speech for bot messages
   const speak = (text) => {
@@ -200,13 +241,18 @@ export default function Chatbot() {
           </div>
         </div>
 
+        {/* Resume upload removed from Chatbot. Use Resume Analyzer page instead. */}
+
         {/* Messages area */}
         <div className="chat-messages-dark">
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`msg-dark ${msg.sender}`}>
-              {msg.sender === 'bot' ? formatBotText(msg.text) : msg.text}
-              {/* Speaker icon for bot messages */}
-              {msg.sender === 'bot' && (
+          {messages.map((msg, idx) => {
+            // Ensure we have a valid sender class (default to 'user' if undefined)
+            const sender = msg.role === 'assistant' ? 'bot' : msg.sender || 'user';
+            return (
+              <div key={idx} className={`msg-dark ${sender}`}>
+                {sender === 'bot' ? renderBotMarkdown(msg.text || msg.content || '') : (msg.text || msg.content || '')}
+                {/* Speaker icon for bot messages */}
+                {sender === 'bot' && (
                 <button
                   className="speak-button-dark"
                   aria-label="Speak message"
@@ -217,9 +263,11 @@ export default function Chatbot() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 12c0 3.59-2.91 6.5-6.5 6.5S6.5 15.59 6.5 12" />
                   </svg>
                 </button>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
+
           <div ref={messagesEndRef} />
         </div>
 
@@ -257,13 +305,7 @@ export default function Chatbot() {
           </button>
         </div>
 
-        {/* Upload progress or error */}
-        {(uploading || uploadError) && (
-          <div className="chat-status-dark">
-            {uploading && <span className="uploading-text">Uploading resume...</span>}
-            {uploadError && <span className="error-text">{uploadError}</span>}
-          </div>
-        )}
+        {/* Upload status removed */}
 
         {/* Payment/Upgrade prompt if out of credits */}
         {credits <= 0 && (

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, memo } from "react";
 import { Renderer, Program, Mesh, Triangle, Vec2 } from "ogl";
 
 const vertex = `
@@ -73,74 +73,195 @@ void main(){
 }
 `;
 
-export default function DarkVeil({
-  hueShift = 0,
-  noiseIntensity = 0,
-  scanlineIntensity = 0,
+const DarkVeil = memo(function DarkVeil({
+  hueShift = 30,
+  noiseIntensity = 0.02,
+  scanlineIntensity = 0.08,
   speed = 0.5,
-  scanlineFrequency = 0,
-  warpAmount = 0,
-  resolutionScale = 1,
+  scanlineFrequency = 4.0,
+  warpAmount = 0.08,
+  resolutionScale = 0.75,
 }) {
-  const ref = useRef(null);
+  const canvasRef = useRef(null);
+  const rendererRef = useRef(null);
+  const frameRef = useRef(null);
+  const initializedRef = useRef(false);
+  const errorRef = useRef(null);
+  const attemptsRef = useRef(0);
+  const containerRef = useRef(null);
+
   useEffect(() => {
-    const canvas = ref.current;
-    const parent = canvas.parentElement;
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
 
-    const renderer = new Renderer({
-      dpr: Math.min(window.devicePixelRatio, 2),
-      canvas,
-    });
+    // Set canvas dimensions
+    const updateCanvasSize = () => {
+      if (!container) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = container.getBoundingClientRect();
+      const width = rect.width * resolutionScale;
+      const height = rect.height * resolutionScale;
 
-    const gl = renderer.gl;
-    const geometry = new Triangle(gl);
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
 
-    const program = new Program(gl, {
-      vertex,
-      fragment,
-      uniforms: {
-        uTime: { value: 0 },
-        uResolution: { value: new Vec2() },
-        uHueShift: { value: hueShift },
-        uNoise: { value: noiseIntensity },
-        uScan: { value: scanlineIntensity },
-        uScanFreq: { value: scanlineFrequency },
-        uWarp: { value: warpAmount },
-      },
-    });
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.scale(dpr, dpr);
+      }
 
-    const mesh = new Mesh(gl, { geometry, program });
-
-    const resize = () => {
-      const w = parent.clientWidth,
-        h = parent.clientHeight;
-      renderer.setSize(w * resolutionScale, h * resolutionScale);
-      program.uniforms.uResolution.value.set(w, h);
+      return { width, height };
     };
 
-    window.addEventListener("resize", resize);
-    resize();
+    // First-time initialization
+    if (!rendererRef.current && !initializedRef.current) {
+      try {
+        initializedRef.current = true;
+        // Update canvas size first
+        updateCanvasSize();
 
-    const start = performance.now();
-    let frame = 0;
+        // Try to create WebGL context
+        const contextNames = ['webgl2', 'webgl', 'experimental-webgl'];
+        let preCtx = null;
+        for (const name of contextNames) {
+          preCtx = canvas.getContext(name, { 
+            premultipliedAlpha: false, 
+            alpha: false, 
+            antialias: false, 
+            powerPreference: 'high-performance',
+            preserveDrawingBuffer: false,
+            stencil: false,
+            depth: false
+          });
+          if (preCtx) break;
+        }
+        if (!preCtx) {
+          const errorMsg = `WebGL not supported. Tried: ${contextNames.join(', ')}`;
+          console.error(errorMsg);
+          attemptsRef.current += 1;
+          if (attemptsRef.current < 3) {
+            console.log(`Retry attempt ${attemptsRef.current}...`);
+            setTimeout(() => { initializedRef.current = false; }, 250);
+          } else {
+            errorRef.current = errorMsg;
+          }
+          return;
+        }
+        // Let OGL create/attach its own context (will reuse existing canvas)
+        const renderer = new Renderer({
+          dpr: Math.min(window.devicePixelRatio || 1, 1.5),
+          canvas,
+          alpha: false,
+          antialias: false,
+          premultipliedAlpha: false,
+        });
+        const glCtx = renderer.gl || preCtx;
+        if (!glCtx) {
+          errorRef.current = 'WebGL context failed';
+          initializedRef.current = false;
+          return;
+        }
+        glCtx.clearColor(0,0,0,1);
 
-    const loop = () => {
-      program.uniforms.uTime.value =
-        ((performance.now() - start) / 1000) * speed;
-      program.uniforms.uHueShift.value = hueShift;
-      program.uniforms.uNoise.value = noiseIntensity;
-      program.uniforms.uScan.value = scanlineIntensity;
-      program.uniforms.uScanFreq.value = scanlineFrequency;
-      program.uniforms.uWarp.value = warpAmount;
-      renderer.render({ scene: mesh });
-      frame = requestAnimationFrame(loop);
-    };
+        const geometry = new Triangle(glCtx);
+        const program = new Program(glCtx, {
+          vertex,
+          fragment,
+          uniforms: {
+            uTime: { value: 0 },
+            uResolution: { value: new Vec2() },
+            // Boost defaults slightly for clearer appearance if props are low
+            uHueShift: { value: hueShift },
+            uNoise: { value: noiseIntensity || 0.03 },
+            uScan: { value: scanlineIntensity || 0.12 },
+            uScanFreq: { value: scanlineFrequency || 6.0 },
+            uWarp: { value: warpAmount || 0.1 },
+          },
+        });
+        const mesh = new Mesh(glCtx, { geometry, program });
 
-    loop();
+        const resize = () => {
+          const size = updateCanvasSize();
+          if (size) {
+            const { width, height } = size;
+            if (width > 0 && height > 0) {
+              renderer.setSize(width, height);
+              program.uniforms.uResolution.value.set(width, height);
+            }
+          }
+        };
+
+        let resizeTimeout;
+        const throttledResize = () => {
+          clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(resize, 120);
+        };
+        window.addEventListener('resize', throttledResize);
+        resize();
+
+        const start = performance.now();
+        const loop = () => {
+          const store = rendererRef.current;
+          if (!store) return;
+          try {
+            program.uniforms.uTime.value = ((performance.now() - start) / 1000) * speed;
+            program.uniforms.uHueShift.value = hueShift;
+            program.uniforms.uNoise.value = noiseIntensity;
+            program.uniforms.uScan.value = scanlineIntensity;
+            program.uniforms.uScanFreq.value = scanlineFrequency;
+            program.uniforms.uWarp.value = warpAmount;
+            renderer.render({ scene: mesh });
+            frameRef.current = requestAnimationFrame(loop);
+          } catch (e) {
+            console.warn('DarkVeil: loop error', e);
+            if (frameRef.current) cancelAnimationFrame(frameRef.current);
+          }
+        };
+        frameRef.current = requestAnimationFrame(loop);
+
+        rendererRef.current = {
+          renderer,
+          program,
+          mesh,
+          cleanup: () => {
+            window.removeEventListener('resize', throttledResize);
+            clearTimeout(resizeTimeout);
+            if (frameRef.current) {
+              cancelAnimationFrame(frameRef.current);
+              frameRef.current = null;
+            }
+          }
+        };
+
+        // Initial render
+        renderer.render({ scene: mesh });
+      } catch (e) {
+        errorRef.current = e.message || 'Initialization failed';
+        initializedRef.current = false;
+      }
+    } else if (rendererRef.current?.program?.uniforms) {
+      // Update uniforms on prop change
+      const uniforms = rendererRef.current.program.uniforms;
+      uniforms.uHueShift.value = hueShift;
+      uniforms.uNoise.value = noiseIntensity;
+      uniforms.uScan.value = scanlineIntensity;
+      uniforms.uScanFreq.value = scanlineFrequency;
+      uniforms.uWarp.value = warpAmount;
+    }
 
     return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("resize", resize);
+      if (frameRef.current) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      // Don't cleanup renderer on unmount to prevent re-initialization issues
+      // Only cleanup event listeners
+      if (rendererRef.current?.cleanup) {
+        rendererRef.current.cleanup();
+      }
     };
   }, [
     hueShift,
@@ -151,10 +272,56 @@ export default function DarkVeil({
     warpAmount,
     resolutionScale,
   ]);
+  // If WebGL failed, return null (fallback background will show)
+  if (errorRef.current) {
+    console.error('DarkVeil error:', errorRef.current);
+    // Lightweight animated CSS gradient fallback
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          background: 'radial-gradient(circle at 30% 30%, rgba(90,0,120,0.6), transparent 60%), radial-gradient(circle at 70% 60%, rgba(30,0,80,0.5), transparent 55%), linear-gradient(135deg,#0f0c29,#302b63,#24243e)',
+          animation: 'dvPulse 8s linear infinite',
+          opacity: 0.9,
+          zIndex: -9, // Slightly higher than parent
+        }}
+      />
+    );
+  }
+
   return (
-    <canvas
-      ref={ref}
-      className="w-full h-full block"
-    />
+    <div 
+      ref={containerRef}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        overflow: 'hidden',
+        zIndex: -9, // Slightly higher than parent
+      }}
+    >
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          width: '100%',
+          height: '100%',
+          transform: 'translate(-50%, -50%)',
+          opacity: 0.8,
+        }}
+      />
+    </div>
   );
-} 
+});
+
+DarkVeil.displayName = 'DarkVeil';
+
+export default DarkVeil; 
