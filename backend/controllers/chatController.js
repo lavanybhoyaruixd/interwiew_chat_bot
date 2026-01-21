@@ -28,9 +28,8 @@ function buildMessagesFromHistory(systemContent, history = [], userMessage) {
 const responseCache = new Map();
 const CACHE_TTL = 1000 * 60 * 30; // 30 minutes
 
-// Base, interview-focused system prompt (optimized for speed)
-function baseInterviewSystemPrompt(resumeText = null) {
-  const resumeSection = buildResumeContextSection(resumeText);
+// Base, interview-focused system prompt (PRIVACY: NO resume context by default)
+function baseInterviewSystemPrompt() {
   return `You are HireMate, a professional Tech Interview Assistant.
 Output must be interview-ready, human-readable, and safe to render in UI.
 
@@ -47,10 +46,15 @@ STYLE:
 - Focus on key points
 - Keep responses under 200 words unless detailed explanation is needed
 - Internally rewrite and clean the answer before returning it
-${resumeSection}`;
+
+IMPORTANT: Do not use any uploaded resume data. Answer based on general knowledge only.
+Resume data is only provided when the user explicitly asks for resume-based analysis.`;
 }
 
 function buildResumeContextSection(resumeText) {
+  // DEPRECATED: This function is no longer used.
+  // Resume data is ONLY injected in resume-specific endpoints.
+  // This prevents privacy leaks into general chatbot responses.
   if (!resumeText || typeof resumeText !== 'string') return '';
   const clean = resumeText.replace(/\s+/g, ' ').trim();
   if (!clean) return '';
@@ -85,22 +89,20 @@ async function message(req, res) {
       });
     }
     
-    // Get resume text if available
-    const resumeText = getResumeText();
-    const enhancedMessage = resumeText 
-      ? `[Resume: ${resumeText.substring(0, 2000)}]\n\nUser: ${userMessage}`
-      : userMessage;
+    // PRIVACY PROTECTION: Do NOT inject resume into general chat
+    // Resume data is only used in resume-specific endpoints (/api/resume/ask, /api/ats/analyze)
+    // This ensures user privacy and correct AI behavior in general interview discussions
 
-    if (!enhancedMessage || !enhancedMessage.trim()) throw new ApiError(400, 'Message is required');
+    if (!userMessage || !userMessage.trim()) throw new ApiError(400, 'Message is required');
 
     // Enforce topic scope
-    const allowed = await enhancedAI.checkIfInterviewRelated(enhancedMessage);
+    const allowed = await enhancedAI.checkIfInterviewRelated(userMessage);
     if (!allowed) {
       return res.json({ success: true, response: "> \"I specialize in interview and tech-related topics 😊. Please ask me something about careers, coding, or job preparation!\"", timestamp: new Date().toISOString() });
     }
 
-    const system = baseInterviewSystemPrompt(resumeText);
-    const messages = buildMessagesFromHistory(system, history, enhancedMessage);
+    const system = baseInterviewSystemPrompt();
+    const messages = buildMessagesFromHistory(system, history, userMessage);
 
     const result = await withTimeout(() =>
       enhancedAI.groq.chat.completions.create({
@@ -149,7 +151,7 @@ async function explain(req, res) {
     return res.json({ success: true, explanation: "> \"I specialize in interview and tech-related topics 😊. Please ask me something about careers, coding, or job preparation!\"", topic, level, timestamp: new Date().toISOString() });
   }
 
-  const system = `${baseInterviewSystemPrompt(req.body?.resumeText)}\nTailor to ${level}. Prefer short, role-relevant explanations.`;
+  const system = `${baseInterviewSystemPrompt()}\nTailor to ${level}. Prefer short, role-relevant explanations.`;
   const messages = buildMessagesFromHistory(system, history, `Explain ${topic} for ${level} interview prep.`);
 
   const result = await withTimeout(() =>
@@ -179,7 +181,7 @@ async function explain(req, res) {
 }
 
 async function ask(req, res) {
-  const { question, history = [], domain = null, level = 'mid', resumeText = null } = req.body || {};
+  const { question, history = [], domain = null, level = 'mid', useResume = false } = req.body || {};
   if (!question || !question.trim()) throw new ApiError(400, 'Question is required');
 
   if (req.user?.hasCredits && !req.user.hasCredits(1)) {
@@ -206,25 +208,30 @@ async function ask(req, res) {
   if (intent.type === 'generate_questions') {
     return handleTechQuestion(intent, level, question, res);
   }
-  // Use personalized system prompt when resume context is present
-  if (resumeText) {
-    const system = baseInterviewSystemPrompt(resumeText);
-    const messages = buildMessagesFromHistory(system, history, question);
-    const result = await withTimeout(() =>
-      aiService.groq.chat.completions.create({
-        model: 'llama-3.1-8b-instant',
-        messages,
-        temperature: 0.4,
-        max_tokens: 420
-      }),
-    25000);
-    const content = result.choices?.[0]?.message?.content || fallback();
-    if (req.user && req.user.deductCredits) {
-      await req.user.deductCredits(1);
+  
+  // PRIVACY PROTECTION: Only use resume if explicitly requested via useResume flag
+  if (useResume === true) {
+    const resumeText = getResumeText();
+    if (resumeText) {
+      const system = baseInterviewSystemPrompt() + `\n\nCandidate Resume:\n${resumeText.substring(0, 1500)}`;
+      const messages = buildMessagesFromHistory(system, history, question);
+      const result = await withTimeout(() =>
+        aiService.groq.chat.completions.create({
+          model: 'llama-3.1-8b-instant',
+          messages,
+          temperature: 0.4,
+          max_tokens: 420
+        }),
+      25000);
+      const content = result.choices?.[0]?.message?.content || fallback();
+      if (req.user && req.user.deductCredits) {
+        await req.user.deductCredits(1);
+      }
+      return res.json({ success: true, response: ensureMarkdown(formatInterviewAnswer(content)), question, timestamp: new Date().toISOString(), creditsRemaining: req.user?.credits ?? null });
     }
-    return res.json({ success: true, response: ensureMarkdown(formatInterviewAnswer(content)), question, timestamp: new Date().toISOString(), creditsRemaining: req.user?.credits ?? null });
   }
 
+  // Default: NO resume context (privacy-safe)
   const response = await enhancedAI.generateContextualChatResponse(question, domain, level, history);
   
   // Deduct credit after successful response
@@ -259,7 +266,7 @@ async function help(req, res) {
     return res.json({ success: true, help: "> \"I specialize in interview and tech-related topics 😊. Please ask me something about careers, coding, or job preparation!\"", question, language, difficulty, timestamp: new Date().toISOString() });
   }
 
-  const system = `${baseInterviewSystemPrompt(req.body?.resumeText)}\nKeep it practical. Difficulty: ${difficulty}.`;
+  const system = `${baseInterviewSystemPrompt()}\nKeep it practical. Difficulty: ${difficulty}.`;
   const prefix = language ? `[${language}] ` : '';
   const messages = buildMessagesFromHistory(system, history, `${prefix}${question}`);
 
