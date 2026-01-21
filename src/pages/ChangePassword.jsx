@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchJson } from '../api/http.js';
+import { API_BASE } from '../api/base.js';
 
 export default function ChangePassword() {
   const navigate = useNavigate();
@@ -29,7 +30,7 @@ export default function ChangePassword() {
 
     setLoading(true);
     try {
-      const data = await fetchJson('/api/auth/change-password', {
+      const data = await fetchJson(`${API_BASE}/api/auth/change-password`, {
         method: 'POST',
         body: { currentPassword, newPassword }
       }, { auth: 'required' });

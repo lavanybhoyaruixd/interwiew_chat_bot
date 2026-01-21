@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { fetchJson } from '../api/http.js';
+import { API_BASE } from '../api/base.js';
 
 export default function Pricing() {
   const navigate = useNavigate();
@@ -103,7 +104,7 @@ export default function Pricing() {
     }
 
     try {
-      const data = await fetchJson('/api/payments/razorpay/order', {
+      const data = await fetchJson(`${API_BASE}/api/payments/razorpay/order`, {
         method: 'POST',
         body: { packageType: plan.packageType }
       }, { auth: 'required' });
@@ -124,7 +125,7 @@ export default function Pricing() {
         },
         handler: async (response) => {
           try {
-            await fetchJson('/api/payments/razorpay/verify', {
+            await fetchJson(`${API_BASE}/api/payments/razorpay/verify`, {
               method: 'POST',
               body: {
                 orderId: response.razorpay_order_id,

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { fetchJson, tokenStorage } from '../api/http.js';
+import { API_BASE } from '../api/base.js';
 
 const AuthContext = createContext(null);
 
@@ -18,7 +19,7 @@ export function AuthProvider({ children }) {
 
     setLoading(true);
     try {
-      const data = await fetchJson('/api/auth/me', { method: 'GET' }, { auth: 'required' });
+      const data = await fetchJson(`${API_BASE}/api/auth/me`, { method: 'GET' }, { auth: 'required' });
       setUser(data?.user ?? null);
       return data?.user ?? null;
     } catch (err) {
@@ -34,7 +35,7 @@ export function AuthProvider({ children }) {
   const login = async (email, password) => {
     setLoading(true);
     try {
-      const data = await fetchJson('/api/auth/login', {
+      const data = await fetchJson(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         body: { email, password }
       });
@@ -58,7 +59,7 @@ export function AuthProvider({ children }) {
   const register = async (name, email, password) => {
     setLoading(true);
     try {
-      const data = await fetchJson('/api/auth/register', {
+      const data = await fetchJson(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         body: { name, email, password }
       });

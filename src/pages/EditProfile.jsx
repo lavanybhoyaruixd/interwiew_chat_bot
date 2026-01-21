@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { fetchJson } from '../api/http.js';
+import { API_BASE } from '../api/base.js';
 
 export default function EditProfile() {
   const navigate = useNavigate();
@@ -24,7 +25,7 @@ export default function EditProfile() {
 
     setLoading(true);
     try {
-      const data = await fetchJson('/api/auth/profile', {
+      const data = await fetchJson(`${API_BASE}/api/auth/profile`, {
         method: 'PUT',
         body: { name: name.trim() }
       }, { auth: 'required' });
