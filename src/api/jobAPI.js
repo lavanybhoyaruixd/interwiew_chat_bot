@@ -156,7 +156,7 @@ export async function getJobSuggestions(tokenOrQuery, limitOrPage = 10, queryOrN
       params.append('query', queryString);
     }
 
-    const data = await fetchJson(`${API_BASE}/api/suggestions?${params.toString()}`, {
+    const data = await fetchJson(`${API_BASE}/api/jobs/suggestions?${params.toString()}`, {
       method: 'GET',
       headers: {
         ...authHeaders(token)
@@ -164,15 +164,7 @@ export async function getJobSuggestions(tokenOrQuery, limitOrPage = 10, queryOrN
     });
 
     // Always return a valid object to avoid `undefined.success` errors
-    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
-    const jobs = suggestions.map((item, index) => ({
-      id: item.applyUrl || `${item.title}-${index}`,
-      title: item.title || 'Job Title',
-      company: item.company || 'Company',
-      location: item.location || 'Remote',
-      url: item.applyUrl || '#',
-      matchScore: Math.floor(Math.random() * 100)
-    }));
+    const jobs = Array.isArray(data?.data?.jobs) ? data.data.jobs : [];
 
     return {
       success: data?.success ?? false,
