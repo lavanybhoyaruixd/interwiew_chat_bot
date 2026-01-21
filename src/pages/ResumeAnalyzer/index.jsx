@@ -92,27 +92,30 @@ const ResumeAnalyzer = () => {
     setQaHistory(h => [...h, userEntry]);
     
     try {
+      const token = localStorage.getItem('hiremate_token');
       const response = await fetch(`${API_BASE}/api/resume/ask`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
         body: JSON.stringify({ question: question.trim() })
       });
       
       if (!response.ok) {
-        throw new Error('Failed to get answer');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to get answer (${response.status})`);
       }
       
       const result = await response.json();
-      const assistant = { type: 'assistant', content: result.answer };
+      const assistant = { type: 'assistant', content: result.answer || result.data };
       setQaHistory(h => [...h, assistant]);
       toast.success('Question answered successfully');
     } catch (err) {
-      console.error(err);
-      const sys = { type: 'system', content: 'Failed to get answer. Please try again.' };
+      console.error('Ask question error:', err);
+      const sys = { type: 'system', content: `Failed to get answer. ${err.message || 'Please try again.'}` };
       setQaHistory(h => [...h, sys]);
-      toast.error('Failed to get answer');
+      toast.error(err.message || 'Failed to get answer');
     } finally {
       setQuestion('');
       setIsAsking(false);
