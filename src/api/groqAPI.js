@@ -13,7 +13,7 @@ class GroqAPI {
     try {
       // Expected backend response:
       // { success: true, response: "AI text" }
-      return await fetchJson(`${this.baseURL}/chat/message`, {
+      return await fetchJson(`${this.baseURL}/api/chat/message`, {
         method: 'POST',
         headers: {
           ...authHeaders()
@@ -36,7 +36,7 @@ class GroqAPI {
      ========================================================= */
   async streamChat(messages, onChunk, onComplete, onError) {
     try {
-      const response = await fetch(`${this.baseURL}/groq/stream`, {
+      const response = await fetch(`${this.baseURL}/api/groq/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -115,7 +115,7 @@ class GroqAPI {
       ...authHeaders()
     };
 
-    const response = await fetch(`${this.baseURL}/groq/questions`, {
+    const response = await fetch(`${this.baseURL}/api/groq/questions`, {
       method: 'POST',
       headers,
       body: formData

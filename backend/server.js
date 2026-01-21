@@ -23,6 +23,7 @@ const resumeRoutes = require('./routes/resume');
 const atsRoutes = require('./routes/ats');
 const jobsRoutes = require('./routes/jobs');
 const groqRoutes = require('./routes/groq');
+const suggestionsRoutes = require('./routes/suggestions');
 
 const app = express();
 
@@ -154,6 +155,7 @@ app.use('/api/resume', resumeRoutes); // Using the main resume routes
 app.use('/api/ats', atsRoutes); // Real-time ATS scoring with Groq AI
 app.use('/api/jobs', jobsRoutes); // Job suggestions & matching
 app.use('/api', groqRoutes); // Groq AI chat completions
+app.use('/api', suggestionsRoutes); // Simple job suggestions (RapidAPI JSearch)
 
 
 // Root endpoint

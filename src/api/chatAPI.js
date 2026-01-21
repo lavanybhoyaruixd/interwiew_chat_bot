@@ -30,7 +30,7 @@ class ChatAPI {
       let fullResponse = '';
 
       const openSSE = (baseUrl) => {
-        const url = new URL(`${baseUrl}/chat/stream`);
+        const url = new URL(`${baseUrl}/api/chat/stream`);
         url.searchParams.set('question', message);
         if (token) url.searchParams.set('token', token);
         
@@ -117,7 +117,7 @@ class ChatAPI {
       });
 
       // Use backend smart chat endpoint to generate the response (no client-side keys)
-      const endpoint = `${this.backendURL}/chat/ask`;
+      const endpoint = `${this.backendURL}/api/chat/ask`;
       let data;
       try {
         // Send recent conversation history for context
@@ -138,7 +138,7 @@ class ChatAPI {
         });
       } catch (err) {
         // Localhost fallback for 5001/5000
-        const isLocal = /http:\/\/(localhost|127\.0\.0\.1):5\d{3}\/api/.test(this.backendURL);
+        const isLocal = /http:\/\/(localhost|127\.0\.0\.1):5\d{3}$/.test(this.backendURL);
         if (!isLocal) throw err;
 
         const altBase = this.backendURL
@@ -149,7 +149,7 @@ class ChatAPI {
 
         if (altBase === this.backendURL) throw err;
 
-        data = await fetchJson(`${altBase}/chat/ask`, {
+        data = await fetchJson(`${altBase}/api/chat/ask`, {
           method: 'POST',
           headers: {
             ...authHeaders()

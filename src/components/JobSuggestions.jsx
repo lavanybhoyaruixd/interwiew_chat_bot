@@ -62,7 +62,7 @@ const JobSuggestions = React.memo(({ jobTitle = 'software engineer', limit = 5, 
     <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
       <p className="font-bold">Error</p>
       <p>{error}</p>
-      <p className="text-sm mt-2">Make sure you have set up your RapidAPI key in the jobAPI.js file.</p>
+      <p className="text-sm mt-2">Check your backend URL (VITE_API_BASE_URL) and the /api/jobs/suggestions route.</p>
     </div>
   );
 

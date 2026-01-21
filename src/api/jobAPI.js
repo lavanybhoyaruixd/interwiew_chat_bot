@@ -116,6 +116,7 @@
 // Frontend API for fetching job suggestions from your backend
 
 import { fetchJson, tokenStorage, authHeaders } from './http.js';
+import { API_BASE } from './base.js';
 
 export async function getJobSuggestions(tokenOrQuery, limitOrPage = 10, queryOrNumPages = '') {
   try {
@@ -155,7 +156,7 @@ export async function getJobSuggestions(tokenOrQuery, limitOrPage = 10, queryOrN
       params.append('query', queryString);
     }
 
-    const data = await fetchJson(`/api/jobs/suggestions?${params.toString()}`, {
+    const data = await fetchJson(`${API_BASE}/api/suggestions?${params.toString()}`, {
       method: 'GET',
       headers: {
         ...authHeaders(token)
@@ -163,10 +164,20 @@ export async function getJobSuggestions(tokenOrQuery, limitOrPage = 10, queryOrN
     });
 
     // Always return a valid object to avoid `undefined.success` errors
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+    const jobs = suggestions.map((item, index) => ({
+      id: item.applyUrl || `${item.title}-${index}`,
+      title: item.title || 'Job Title',
+      company: item.company || 'Company',
+      location: item.location || 'Remote',
+      url: item.applyUrl || '#',
+      matchScore: Math.floor(Math.random() * 100)
+    }));
+
     return {
-      success: data.success ?? false,
-      data: data.data ?? { jobs: [] },
-      message: data.message ?? null
+      success: data?.success ?? false,
+      data: { jobs },
+      message: data?.message ?? null
     };
 
   } catch (err) {
