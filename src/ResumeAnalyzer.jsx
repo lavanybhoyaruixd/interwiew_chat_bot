@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { API_BASE } from './api/base';
 import './resumeAnalyzer.css';
 
 export default function ResumeAnalyzer() {
@@ -36,9 +37,8 @@ export default function ResumeAnalyzer() {
       formData.append('resume', file);
 
       const token = localStorage.getItem('hiremate_token');
-      const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api';
 
-      const response = await fetch(`${base}/interview/upload-resume?method=memory`, {
+      const response = await fetch(`${API_BASE}/api/interview/upload-resume?method=memory`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData
@@ -73,9 +73,8 @@ export default function ResumeAnalyzer() {
       formData.append('resume', file);
 
       const token = localStorage.getItem('hiremate_token');
-      const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001/api';
 
-      const response = await fetch(`${base}/resume/analyze`, {
+      const response = await fetch(`${API_BASE}/api/resume/analyze`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData

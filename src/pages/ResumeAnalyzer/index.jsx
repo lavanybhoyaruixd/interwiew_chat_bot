@@ -56,7 +56,7 @@ const ResumeAnalyzer = () => {
         formData.append('jobDescription', jobDescription.trim());
       }
       
-      const response = await fetch(`${API_BASE}/ats/analyze`, {
+      const response = await fetch(`${API_BASE}/api/ats/analyze`, {
         method: 'POST',
         body: formData
       });
@@ -92,7 +92,7 @@ const ResumeAnalyzer = () => {
     setQaHistory(h => [...h, userEntry]);
     
     try {
-      const response = await fetch(`${API_BASE}/resume/ask`, {
+      const response = await fetch(`${API_BASE}/api/resume/ask`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
